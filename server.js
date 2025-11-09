@@ -1,32 +1,52 @@
+// ============================================================
+// BACKEND — visor-fullereno
+// Procesa archivos .out de ORCA y devuelve JSON
+// José Ángel Arrocha Rojas — MIME UNACAR — 2025
+// ============================================================
 
 import express from "express";
 import multer from "multer";
 import fs from "fs/promises";
+import cors from "cors";
 
 const app = express();
 
-// --- CORS mínimo para permitir uso desde el navegador ---
-app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
+// ============================================================
+// 1️⃣ CORS — permite solicitudes desde tu dominio Hostinger
+// ============================================================
+app.use(cors({
+  origin: [
+    "https://www.fullerenoc28.sbs",
+    "https://www.fullerenoc28.sbs/visor_de_outputs",
+    "https://fullerenoc28.sbs",
+    "https://fullerenoc28.sbs/visor_de_outputs"
+  ],
+  methods: ["POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"]
+}));
 
-// --- API key ---
+// ============================================================
+// 2️⃣ API key
+// ============================================================
 const API_KEY = "UEUNoWwtlV2AJg1WxkTvgdU4DYgxVPMkOr6Jyn6V";
 
-// --- Multer (límite 60 MB) ---
-const upload = multer({ dest: "uploads/", limits: { fileSize: 60 * 1024 * 1024 } });
+// ============================================================
+// 3️⃣ Configuración de subida temporal (60 MB máx.)
+// ============================================================
+const upload = multer({
+  dest: "uploads/",
+  limits: { fileSize: 60 * 1024 * 1024 } // 60 MB
+});
 
-// --- Parser ORCA inline (coordenadas finales + energía) ---
+// ============================================================
+// 4️⃣ Parser ORCA (geometría + energía)
+// ============================================================
 function parseOrcaOut(text) {
   if (!text || typeof text !== "string") return { atoms: [], energy: null };
   const lines = text.split(/\r?\n/);
   let geomStart = -1;
 
-  // Preferir bloque final clásico
+  // Buscar bloque final
   for (let i = lines.length - 1; i >= 0; i--) {
     if (lines[i].includes("FINAL ENERGY EVALUATION AT THE STATIONARY POINT")) {
       for (let j = i + 1; j < lines.length; j++) {
@@ -39,22 +59,7 @@ function parseOrcaOut(text) {
     }
   }
 
-  // Si no, último ciclo de optimización
-  if (geomStart === -1) {
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].includes("GEOMETRY OPTIMIZATION CYCLE")) {
-        for (let j = i; j < lines.length; j++) {
-          if (lines[j].includes("CARTESIAN COORDINATES (ANGSTROEM)")) {
-            geomStart = j + 2;
-            break;
-          }
-        }
-        break;
-      }
-    }
-  }
-
-  // Si no, último bloque de coordenadas disponible
+  // Si no, último bloque de coordenadas
   if (geomStart === -1) {
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].includes("CARTESIAN COORDINATES (ANGSTROEM)")) {
@@ -95,11 +100,12 @@ function parseOrcaOut(text) {
   return { atoms, energy };
 }
 
-// --- Endpoint principal ---
+// ============================================================
+// 5️⃣ Endpoint principal
+// ============================================================
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
-    // Validar API key (viene en multipart form-data)
-    const key = (req.body && req.body.api_key) || "";
+    const key = req.body.apikey || req.body.api_key || "";
     if (!key || key !== API_KEY) {
       if (req.file?.path) { try { await fs.unlink(req.file.path); } catch {} }
       return res.status(403).json({ success: false, msg: "Acceso no autorizado" });
@@ -112,17 +118,19 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     const text = await fs.readFile(req.file.path, "utf-8");
     const { atoms, energy } = parseOrcaOut(text);
 
-    // Borrar el archivo temporal antes de responder
+    // Eliminar el archivo temporal
     try { await fs.unlink(req.file.path); } catch {}
 
-    // Responder directamente con JSON (no se guarda en disco)
+    // Enviar respuesta
     return res.json({ success: true, atoms, energy });
   } catch (err) {
-    // Intentar limpiar si quedó archivo temporal
     if (req.file?.path) { try { await fs.unlink(req.file.path); } catch {} }
     return res.status(500).json({ success: false, msg: err?.message || "Error interno" });
   }
 });
 
+// ============================================================
+// 6️⃣ Servidor activo
+// ============================================================
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`visor-fullereno activo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`✅ visor-fullereno activo en puerto ${PORT}`));
