@@ -57,17 +57,46 @@ function hypot3(a, b, c) {
 // ============================================================
 function parseOrcaOut(text) {
   if (!text || typeof text !== "string") {
-    return { atoms: [], energy: null, efield: null };
+    return { atoms: [], energy: null, efield: null, siteIndex: null, adsorbateIdx: [] };
   }
 
   const lines = text.split(/\r?\n/);
 
   // -------------------------
-  // 4.1 Coordenadas (último bloque útil)
+  // A) PRIMER bloque de coordenadas (geometría inicial)
+  // -------------------------
+  let initialStart = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes("CARTESIAN COORDINATES (ANGSTROEM)")) {
+      initialStart = i + 2;  // dos líneas después del encabezado
+      break;
+    }
+  }
+
+  const initialAtoms = [];
+  if (initialStart !== -1) {
+    for (let i = initialStart; i < lines.length; i++) {
+      const l = lines[i].trim();
+      if (!l || l.startsWith("-")) break;
+      const parts = l.split(/\s+/);
+      if (parts.length >= 4) {
+        const el = parts[0];
+        const x = parseFloat(parts[1]);
+        const y = parseFloat(parts[2]);
+        const z = parseFloat(parts[3]);
+        if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+          initialAtoms.push({ el, x, y, z });
+        }
+      }
+    }
+  }
+
+  // -------------------------
+  // B) Coordenadas finales (último bloque útil)
   // -------------------------
   let geomStart = -1;
 
-  // Buscar bloque final
+  // Buscar bloque posterior a "FINAL ENERGY EVALUATION..."
   for (let i = lines.length - 1; i >= 0; i--) {
     if (lines[i].includes("FINAL ENERGY EVALUATION AT THE STATIONARY POINT")) {
       for (let j = i + 1; j < lines.length; j++) {
@@ -80,7 +109,7 @@ function parseOrcaOut(text) {
     }
   }
 
-  // Si no, último bloque de coordenadas
+  // Si no se encontró, usar el último bloque "CARTESIAN COORDINATES (ANGSTROEM)"
   if (geomStart === -1) {
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].includes("CARTESIAN COORDINATES (ANGSTROEM)")) {
@@ -109,7 +138,7 @@ function parseOrcaOut(text) {
   }
 
   // -------------------------
-  // 4.2 Energía FINAL SINGLE POINT ENERGY
+  // C) Energía FINAL SINGLE POINT ENERGY
   // -------------------------
   let energy = null;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -122,12 +151,10 @@ function parseOrcaOut(text) {
   }
 
   // -------------------------
-  // 4.3 Campo eléctrico externo (efield) en a.u.
-  //     Devuelve { ex, ey, ez, mag } o null
+  // D) Campo eléctrico externo (efield) en a.u.
   // -------------------------
   let efield = null;
 
-  // Patrones comunes (robustos)
   const float = "[-+]?\\d*\\.?\\d+(?:[Ee][-+]?\\d+)?";
   const reVecInline = new RegExp(
     `\\b(?:E\\s*FIELD|EFIELD|E-FIELD|Electric\\s+Field|EXTERNAL\\s+ELECTRIC\\s+FIELD)\\b[^\\d-+]*(${float})\\s+(${float})\\s+(${float})`,
@@ -143,7 +170,6 @@ function parseOrcaOut(text) {
   );
   const reMag = new RegExp(`\\b\\|?E\\|?\\b\\s*[:=]\\s*(${float})`, "i");
 
-  // Escaneo desde abajo (normalmente el dato relevante está al final)
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
 
@@ -166,7 +192,6 @@ function parseOrcaOut(text) {
       const ey = toNum(m2[2]);
       const ez = toNum(m2[3]);
       if (ex != null && ey != null && ez != null) {
-        // Busca magnitud cerca (misma línea o líneas cercanas)
         let mag = null;
         const mm = line.match(reMag);
         if (mm) mag = toNum(mm[1]);
@@ -179,21 +204,17 @@ function parseOrcaOut(text) {
       }
     }
 
-    // 3) Bloque cercano: detecta encabezado y lee 2–6 líneas siguientes buscando Ex/Ey/Ez
+    // 3) Bloque con encabezado "EXTERNAL ELECTRIC FIELD", etc.
     if (
       /\b(EXTERNAL\s+ELECTRIC\s+FIELD|ELECTRIC\s+FIELD|EFIELD|E-FIELD)\b/i.test(
         line
       )
     ) {
-      let ex = null,
-        ey = null,
-        ez = null,
-        mag = null;
+      let ex = null, ey = null, ez = null, mag = null;
 
       for (let k = i; k < Math.min(i + 8, lines.length); k++) {
         const lk = lines[k];
 
-        // intenta vector inline dentro del bloque
         const mk = lk.match(reVecInline);
         if (mk) {
           ex = toNum(mk[1]);
@@ -201,11 +222,9 @@ function parseOrcaOut(text) {
           ez = toNum(mk[3]);
         }
 
-        // intenta magnitud
         const mm = lk.match(reMag);
         if (mm) mag = toNum(mm[1]);
 
-        // intenta componentes sueltas (Ex, Ey, Ez en líneas separadas)
         if (/\bEx\b/i.test(lk)) {
           const c = lk.match(reComponentLine);
           if (c) ex = toNum(c[1]);
@@ -227,7 +246,100 @@ function parseOrcaOut(text) {
     }
   }
 
-  return { atoms, energy, efield };
+  // -------------------------
+  // E) Sitio de adsorción a partir de la GEOMETRÍA INICIAL
+  //     – adsorbato al final (H2 o CO2)
+  // -------------------------
+  let siteIndex = null;
+  let adsorbateIdx = [];
+
+  if (initialAtoms.length >= 2) {
+    const n = initialAtoms.length;
+
+    // Intentamos identificar H2 (dos H al final)
+    if (n >= 2) {
+      const a1 = initialAtoms[n - 2];
+      const a2 = initialAtoms[n - 1];
+      if (a1.el === "H" && a2.el === "H") {
+        adsorbateIdx = [n - 2, n - 1];
+      }
+    }
+
+    // Si no es H2, intentamos CO2 (últimos 3: 1 C y 2 O, en cualquier orden)
+    if (!adsorbateIdx.length && n >= 3) {
+      const idxs = [n - 3, n - 2, n - 1];
+      const els  = idxs.map(i => initialAtoms[i].el);
+      const countC = els.filter(e => e === "C").length;
+      const countO = els.filter(e => e === "O").length;
+      if (countC === 1 && countO === 2) {
+        adsorbateIdx = idxs;
+      }
+    }
+
+    // Si conseguimos adsorbato al final, calculamos el centro y
+    // el átomo más cercano del resto (fullereno)
+    if (adsorbateIdx.length) {
+      // Centro del adsorbato
+      let center = null;
+
+      // CO2: centro = carbono del adsorbato
+      const idxC = adsorbateIdx.find(i => initialAtoms[i].el === "C");
+      const nO   = adsorbateIdx.filter(i => initialAtoms[i].el === "O").length;
+
+      if (idxC != null && nO === 2) {
+        const cAt = initialAtoms[idxC];
+        center = { x: cAt.x, y: cAt.y, z: cAt.z };
+      } else if (
+        adsorbateIdx.length === 2 &&
+        initialAtoms[adsorbateIdx[0]].el === "H" &&
+        initialAtoms[adsorbateIdx[1]].el === "H"
+      ) {
+        // H2: punto medio
+        const a = initialAtoms[adsorbateIdx[0]];
+        const b = initialAtoms[adsorbateIdx[1]];
+        center = {
+          x: 0.5 * (a.x + b.x),
+          y: 0.5 * (a.y + b.y),
+          z: 0.5 * (a.z + b.z),
+        };
+      } else {
+        // Caso general: centro geométrico del adsorbato
+        let sx = 0, sy = 0, sz = 0;
+        for (const i of adsorbateIdx) {
+          sx += initialAtoms[i].x;
+          sy += initialAtoms[i].y;
+          sz += initialAtoms[i].z;
+        }
+        const inv = 1 / adsorbateIdx.length;
+        center = { x: sx * inv, y: sy * inv, z: sz * inv };
+      }
+
+      // Buscar átomo del "fullereno" más cercano al centro:
+      // asumimos que el fullereno ocupa todos los átomos antes del adsorbato
+      const firstAds = Math.min(...adsorbateIdx);
+      if (firstAds > 0 && center) {
+        let bestD = Infinity;
+        let bestIdx = null;
+
+        for (let i = 0; i < firstAds; i++) {
+          const a = initialAtoms[i];
+          const d = Math.hypot(
+            a.x - center.x,
+            a.y - center.y,
+            a.z - center.z
+          );
+          if (d < bestD) {
+            bestD = d;
+            bestIdx = i;
+          }
+        }
+
+        siteIndex = bestIdx;
+      }
+    }
+  }
+
+  return { atoms, energy, efield, siteIndex, adsorbateIdx };
 }
 
 // ============================================================
@@ -254,7 +366,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     }
 
     const text = await fs.readFile(req.file.path, "utf-8");
-    const { atoms, energy, efield } = parseOrcaOut(text);
+    const { atoms, energy, efield, siteIndex, adsorbateIdx } = parseOrcaOut(text);
 
     // Eliminar el archivo temporal
     try {
@@ -262,7 +374,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     } catch {}
 
     // Enviar respuesta
-    return res.json({ success: true, atoms, energy, efield });
+    return res.json({ success: true, atoms, energy, efield, siteIndex, adsorbateIdx });
   } catch (err) {
     if (req.file?.path) {
       try {
