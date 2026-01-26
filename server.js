@@ -156,14 +156,14 @@ function parseOrcaOut(text) {
   let efield = null;
 
   const float = "[-+]?\\d*\\.?\\d+(?:[Ee][-+]?\\d+)?";
+
+  // 1) Línea con "E FIELD / EFIELD / Electric Field / EXTERNAL ELECTRIC FIELD" y 3 números
   const reVecInline = new RegExp(
     `\\b(?:E\\s*FIELD|EFIELD|E-FIELD|Electric\\s+Field|EXTERNAL\\s+ELECTRIC\\s+FIELD)\\b[^\\d-+]*(${float})\\s+(${float})\\s+(${float})`,
     "i"
   );
-  const reXYZ = new RegExp(
-    `\\bEx\\b\\s*[:=]\\s*(${float}).*\\bEy\\b\\s*[:=]\\s*(${float}).*\\bEz\\b\\s*[:=]\\s*(${float})`,
-    "i"
-  );
+
+  // 2) Componentes Ex/Ey/Ez SOLO dentro de un bloque que hable de campo
   const reComponentLine = new RegExp(
     `\\b(?:Ex|Ey|Ez)\\b\\s*[:=]\\s*(${float})`,
     "i"
@@ -173,7 +173,7 @@ function parseOrcaOut(text) {
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
 
-    // 1) Vector en una sola línea
+    // 1) Vector en una sola línea con palabras de campo
     const m1 = line.match(reVecInline);
     if (m1) {
       const ex = toNum(m1[1]);
@@ -185,26 +185,7 @@ function parseOrcaOut(text) {
       }
     }
 
-    // 2) Ex/Ey/Ez en la misma línea
-    const m2 = line.match(reXYZ);
-    if (m2) {
-      const ex = toNum(m2[1]);
-      const ey = toNum(m2[2]);
-      const ez = toNum(m2[3]);
-      if (ex != null && ey != null && ez != null) {
-        let mag = null;
-        const mm = line.match(reMag);
-        if (mm) mag = toNum(mm[1]);
-        if (mag == null && i + 1 < lines.length) {
-          const mm2 = lines[i + 1].match(reMag);
-          if (mm2) mag = toNum(mm2[1]);
-        }
-        efield = { ex, ey, ez, mag: mag ?? hypot3(ex, ey, ez) };
-        break;
-      }
-    }
-
-    // 3) Bloque con encabezado "EXTERNAL ELECTRIC FIELD", etc.
+    // 2) Bloque con encabezado "EXTERNAL ELECTRIC FIELD", "ELECTRIC FIELD", "EFIELD", etc.
     if (
       /\b(EXTERNAL\s+ELECTRIC\s+FIELD|ELECTRIC\s+FIELD|EFIELD|E-FIELD)\b/i.test(
         line
@@ -212,9 +193,11 @@ function parseOrcaOut(text) {
     ) {
       let ex = null, ey = null, ez = null, mag = null;
 
+      // Miramos unas pocas líneas hacia abajo dentro del bloque de campo
       for (let k = i; k < Math.min(i + 8, lines.length); k++) {
         const lk = lines[k];
 
+        // Por si el propio bloque incluye el vector en una sola línea
         const mk = lk.match(reVecInline);
         if (mk) {
           ex = toNum(mk[1]);
