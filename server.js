@@ -321,8 +321,80 @@ function parseOrcaOut(text) {
       }
     }
   }
+  // -------------------------
+  // F) Normal local en la GEOMETRÍA INICIAL (normal0)
+  //     Se calcula SOLO si se detectó adsorbato y siteIndex
+  // -------------------------
+  let normal0 = null;
 
-  return { atoms, energy, efield, siteIndex, adsorbateIdx };
+  if (siteIndex != null && adsorbateIdx.length && initialAtoms.length) {
+
+    const firstAds = Math.min(...adsorbateIdx);
+
+    // Centro del adsorbato (mismas reglas que usaste para el sitio)
+    let center = null;
+    const idxC = adsorbateIdx.find(i => initialAtoms[i].el === "C");
+    const nO   = adsorbateIdx.filter(i => initialAtoms[i].el === "O").length;
+
+    if (idxC != null && nO === 2) {
+      const cAt = initialAtoms[idxC];
+      center = { x: cAt.x, y: cAt.y, z: cAt.z };
+    } else if (
+      adsorbateIdx.length === 2 &&
+      initialAtoms[adsorbateIdx[0]].el === "H" &&
+      initialAtoms[adsorbateIdx[1]].el === "H"
+    ) {
+      const a = initialAtoms[adsorbateIdx[0]];
+      const b = initialAtoms[adsorbateIdx[1]];
+      center = { x: 0.5*(a.x+b.x), y: 0.5*(a.y+b.y), z: 0.5*(a.z+b.z) };
+    } else {
+      let sx=0,sy=0,sz=0;
+      for (const i of adsorbateIdx) { sx+=initialAtoms[i].x; sy+=initialAtoms[i].y; sz+=initialAtoms[i].z; }
+      const inv = 1/adsorbateIdx.length;
+      center = { x:sx*inv, y:sy*inv, z:sz*inv };
+    }
+
+    // Elegir 2 vecinos del sitio por distancia (NO por bonds)
+    const a0 = initialAtoms[siteIndex];
+
+    const cand = [];
+    for (let i = 0; i < firstAds; i++) {
+      if (i === siteIndex) continue;
+      const ai = initialAtoms[i];
+      const d = Math.hypot(ai.x - a0.x, ai.y - a0.y, ai.z - a0.z);
+      cand.push({ i, d });
+    }
+    cand.sort((u,v)=>u.d-v.d);
+
+    if (cand.length >= 2) {
+      const p1 = initialAtoms[cand[0].i];
+      const p2 = initialAtoms[cand[1].i];
+
+      const v1 = { x: p1.x - a0.x, y: p1.y - a0.y, z: p1.z - a0.z };
+      const v2 = { x: p2.x - a0.x, y: p2.y - a0.y, z: p2.z - a0.z };
+
+      // cross v1 x v2
+      let nx = v1.y*v2.z - v1.z*v2.y;
+      let ny = v1.z*v2.x - v1.x*v2.z;
+      let nz = v1.x*v2.y - v1.y*v2.x;
+
+      const norm = Math.hypot(nx,ny,nz);
+      if (norm > 1e-12) {
+        nx /= norm; ny /= norm; nz /= norm;
+
+        // orientar hacia el adsorbato
+        if (center) {
+          const dir = { x: center.x - a0.x, y: center.y - a0.y, z: center.z - a0.z };
+          const dot = nx*dir.x + ny*dir.y + nz*dir.z;
+          if (dot < 0) { nx=-nx; ny=-ny; nz=-nz; }
+        }
+
+        normal0 = { x: nx, y: ny, z: nz };
+      }
+    }
+  }
+
+  return { atoms, energy, efield, siteIndex, adsorbateIdx, normal0 };
 }
 
 // ============================================================
@@ -349,7 +421,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     }
 
     const text = await fs.readFile(req.file.path, "utf-8");
-    const { atoms, energy, efield, siteIndex, adsorbateIdx } = parseOrcaOut(text);
+    const { atoms, energy, efield, siteIndex, adsorbateIdx, normal0 } = parseOrcaOut(text);
 
     // Eliminar el archivo temporal
     try {
@@ -357,7 +429,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     } catch {}
 
     // Enviar respuesta
-    return res.json({ success: true, atoms, energy, efield, siteIndex, adsorbateIdx });
+    return res.json({ success: true, atoms, energy, efield, siteIndex, adsorbateIdx, normal0 });
   } catch (err) {
     if (req.file?.path) {
       try {
