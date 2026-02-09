@@ -321,73 +321,64 @@ function parseOrcaOut(text) {
       }
     }
   }
-  // -------------------------
+    // -------------------------
   // F) Normal local en la GEOMETRÍA INICIAL (normal0)
-  //     Se calcula SOLO si se detectó adsorbato y siteIndex
+  //     Metodología (Apéndice D.1):
+  //     - Tomar los 3 carbonos más cercanos al átomo activo (siteIndex)
+  //     - Definir el plano con esos 3 C
+  //     - Normal = (C2-C1) x (C3-C1), normalizada
+  //     - Ajustar signo para que apunte hacia el exterior del fullereno
   // -------------------------
   let normal0 = null;
 
-  if (siteIndex != null && adsorbateIdx.length && initialAtoms.length) {
+  if (siteIndex != null && initialAtoms.length) {
+    const firstAds = adsorbateIdx.length ? Math.min(...adsorbateIdx) : initialAtoms.length;
 
-    const firstAds = Math.min(...adsorbateIdx);
-
-    // Centro del adsorbato (mismas reglas que usaste para el sitio)
-    let center = null;
-    const idxC = adsorbateIdx.find(i => initialAtoms[i].el === "C");
-    const nO   = adsorbateIdx.filter(i => initialAtoms[i].el === "O").length;
-
-    if (idxC != null && nO === 2) {
-      const cAt = initialAtoms[idxC];
-      center = { x: cAt.x, y: cAt.y, z: cAt.z };
-    } else if (
-      adsorbateIdx.length === 2 &&
-      initialAtoms[adsorbateIdx[0]].el === "H" &&
-      initialAtoms[adsorbateIdx[1]].el === "H"
-    ) {
-      const a = initialAtoms[adsorbateIdx[0]];
-      const b = initialAtoms[adsorbateIdx[1]];
-      center = { x: 0.5*(a.x+b.x), y: 0.5*(a.y+b.y), z: 0.5*(a.z+b.z) };
-    } else {
-      let sx=0,sy=0,sz=0;
-      for (const i of adsorbateIdx) { sx+=initialAtoms[i].x; sy+=initialAtoms[i].y; sz+=initialAtoms[i].z; }
-      const inv = 1/adsorbateIdx.length;
-      center = { x:sx*inv, y:sy*inv, z:sz*inv };
+    // Centro aproximado del fullereno en la GEOMETRÍA INICIAL (sin adsorbato)
+    let cx = 0, cy = 0, cz = 0;
+    const nFull = Math.max(1, firstAds);
+    for (let i = 0; i < firstAds; i++) {
+      cx += initialAtoms[i].x;
+      cy += initialAtoms[i].y;
+      cz += initialAtoms[i].z;
     }
+    cx /= nFull; cy /= nFull; cz /= nFull;
 
-    // Elegir 2 vecinos del sitio por distancia (NO por bonds)
     const a0 = initialAtoms[siteIndex];
 
-    const cand = [];
+    // 1) Seleccionar los 3 carbonos más cercanos al átomo activo (siteIndex)
+    const candC = [];
     for (let i = 0; i < firstAds; i++) {
       if (i === siteIndex) continue;
       const ai = initialAtoms[i];
+      if (ai.el !== "C") continue;
       const d = Math.hypot(ai.x - a0.x, ai.y - a0.y, ai.z - a0.z);
-      cand.push({ i, d });
+      candC.push({ i, d });
     }
-    cand.sort((u,v)=>u.d-v.d);
+    candC.sort((u, v) => u.d - v.d);
 
-    if (cand.length >= 2) {
-      const p1 = initialAtoms[cand[0].i];
-      const p2 = initialAtoms[cand[1].i];
+    if (candC.length >= 3) {
+      const c1 = initialAtoms[candC[0].i];
+      const c2 = initialAtoms[candC[1].i];
+      const c3 = initialAtoms[candC[2].i];
 
-      const v1 = { x: p1.x - a0.x, y: p1.y - a0.y, z: p1.z - a0.z };
-      const v2 = { x: p2.x - a0.x, y: p2.y - a0.y, z: p2.z - a0.z };
+      // 2) Normal del plano definido por C1, C2, C3
+      const u = { x: c2.x - c1.x, y: c2.y - c1.y, z: c2.z - c1.z };
+      const v = { x: c3.x - c1.x, y: c3.y - c1.y, z: c3.z - c1.z };
 
-      // cross v1 x v2
-      let nx = v1.y*v2.z - v1.z*v2.y;
-      let ny = v1.z*v2.x - v1.x*v2.z;
-      let nz = v1.x*v2.y - v1.y*v2.x;
+      let nx = u.y * v.z - u.z * v.y;
+      let ny = u.z * v.x - u.x * v.z;
+      let nz = u.x * v.y - u.y * v.x;
 
-      const norm = Math.hypot(nx,ny,nz);
+      const norm = Math.hypot(nx, ny, nz);
       if (norm > 1e-12) {
         nx /= norm; ny /= norm; nz /= norm;
 
-        // orientar hacia el adsorbato
-        if (center) {
-          const dir = { x: center.x - a0.x, y: center.y - a0.y, z: center.z - a0.z };
-          const dot = nx*dir.x + ny*dir.y + nz*dir.z;
-          if (dot < 0) { nx=-nx; ny=-ny; nz=-nz; }
-        }
+        // 3) Ajuste de signo: que apunte hacia el EXTERIOR del fullereno
+        // Exterior ~ dirección (a0 - centro_fullereno)
+        const out = { x: a0.x - cx, y: a0.y - cy, z: a0.z - cz };
+        const dotOut = nx * out.x + ny * out.y + nz * out.z;
+        if (dotOut < 0) { nx = -nx; ny = -ny; nz = -nz; }
 
         normal0 = { x: nx, y: ny, z: nz };
       }
