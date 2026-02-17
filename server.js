@@ -403,7 +403,7 @@ const { geometries, initialAtoms, atoms, energy, efield, siteIndex, adsorbateIdx
     } catch {}
 
     // Enviar respuesta
-return res.json({ success: true, geometries, initialAtoms, atoms, energy, efield, siteIndex, adsorbateIdx, normal0 });
+return res.json({ success: true, geometries,   geomSteps: geometries, initialAtoms, atoms, energy, efield, siteIndex, adsorbateIdx, normal0 });
   } catch (err) {
     if (req.file?.path) {
       try {
