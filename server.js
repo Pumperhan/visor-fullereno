@@ -51,79 +51,24 @@ function toNum(x) {
 function hypot3(a, b, c) {
   return Math.hypot(a ?? 0, b ?? 0, c ?? 0);
 }
-
 // ============================================================
-// 4️⃣ Parser ORCA (geometría + energía + efield)
+// Extraer TODAS las geometrías del .out (trayectoria)
+// Cada bloque: "CARTESIAN COORDINATES (ANGSTROEM)"
 // ============================================================
-function parseOrcaOut(text) {
-  if (!text || typeof text !== "string") {
-    return { atoms: [], energy: null, efield: null, siteIndex: null, adsorbateIdx: [] };
-  }
+function extractAllCartesianGeometries(lines) {
+  const header = "CARTESIAN COORDINATES (ANGSTROEM)";
+  const geoms = [];
 
-  const lines = text.split(/\r?\n/);
-
-  // -------------------------
-  // A) PRIMER bloque de coordenadas (geometría inicial)
-  // -------------------------
-  let initialStart = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes("CARTESIAN COORDINATES (ANGSTROEM)")) {
-      initialStart = i + 2;  // dos líneas después del encabezado
-      break;
-    }
-  }
+    if (!lines[i].includes(header)) continue;
 
-  const initialAtoms = [];
-  if (initialStart !== -1) {
-    for (let i = initialStart; i < lines.length; i++) {
-      const l = lines[i].trim();
+    const start = i + 2; // dos líneas después del encabezado
+    const atoms = [];
+
+    for (let j = start; j < lines.length; j++) {
+      const l = lines[j].trim();
       if (!l || l.startsWith("-")) break;
-      const parts = l.split(/\s+/);
-      if (parts.length >= 4) {
-        const el = parts[0];
-        const x = parseFloat(parts[1]);
-        const y = parseFloat(parts[2]);
-        const z = parseFloat(parts[3]);
-        if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-          initialAtoms.push({ el, x, y, z });
-        }
-      }
-    }
-  }
 
-  // -------------------------
-  // B) Coordenadas finales (último bloque útil)
-  // -------------------------
-  let geomStart = -1;
-
-  // Buscar bloque posterior a "FINAL ENERGY EVALUATION..."
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].includes("FINAL ENERGY EVALUATION AT THE STATIONARY POINT")) {
-      for (let j = i + 1; j < lines.length; j++) {
-        if (lines[j].includes("CARTESIAN COORDINATES (ANGSTROEM)")) {
-          geomStart = j + 2;
-          break;
-        }
-      }
-      break;
-    }
-  }
-
-  // Si no se encontró, usar el último bloque "CARTESIAN COORDINATES (ANGSTROEM)"
-  if (geomStart === -1) {
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].includes("CARTESIAN COORDINATES (ANGSTROEM)")) {
-        geomStart = i + 2;
-        break;
-      }
-    }
-  }
-
-  const atoms = [];
-  if (geomStart !== -1) {
-    for (let i = geomStart; i < lines.length; i++) {
-      const l = lines[i].trim();
-      if (!l || l.startsWith("-")) break;
       const parts = l.split(/\s+/);
       if (parts.length >= 4) {
         const el = parts[0];
@@ -135,7 +80,44 @@ function parseOrcaOut(text) {
         }
       }
     }
+
+    if (atoms.length) geoms.push(atoms);
   }
+
+  // Quitar duplicados consecutivos (ORCA a veces repite)
+  const signature = (atoms) => {
+    const n = atoms.length;
+    if (!n) return "0";
+    const a0 = atoms[0];
+    const aL = atoms[n - 1];
+    return `${n}|${a0.el},${a0.x.toFixed(6)},${a0.y.toFixed(6)},${a0.z.toFixed(6)}|${aL.el},${aL.x.toFixed(6)},${aL.y.toFixed(6)},${aL.z.toFixed(6)}`;
+  };
+
+  const cleaned = [];
+  let lastSig = null;
+  for (const g of geoms) {
+    const sig = signature(g);
+    if (sig !== lastSig) cleaned.push(g);
+    lastSig = sig;
+  }
+
+  return cleaned;
+}
+
+// ============================================================
+// 4️⃣ Parser ORCA (geometría + energía + efield)
+// ============================================================
+function parseOrcaOut(text) {
+  if (!text || typeof text !== "string") {
+return { geometries: [], initialAtoms: [], atoms: [], energy: null, efield: null, siteIndex: null, adsorbateIdx: [], normal0: null };
+  }
+
+  const lines = text.split(/\r?\n/);
+const geometries = extractAllCartesianGeometries(lines);
+
+// Definimos inicial y final desde la trayectoria
+const initialAtoms = geometries.length ? geometries[0] : [];
+const atoms        = geometries.length ? geometries[geometries.length - 1] : [];
 
   // -------------------------
   // C) Energía FINAL SINGLE POINT ENERGY
@@ -385,7 +367,8 @@ function parseOrcaOut(text) {
     }
   }
 
-  return { atoms, energy, efield, siteIndex, adsorbateIdx, normal0 };
+return { geometries, initialAtoms, atoms, energy, efield, siteIndex, adsorbateIdx, normal0 };
+
 }
 
 // ============================================================
@@ -412,7 +395,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     }
 
     const text = await fs.readFile(req.file.path, "utf-8");
-    const { atoms, energy, efield, siteIndex, adsorbateIdx, normal0 } = parseOrcaOut(text);
+const { geometries, initialAtoms, atoms, energy, efield, siteIndex, adsorbateIdx, normal0 } = parseOrcaOut(text);
 
     // Eliminar el archivo temporal
     try {
@@ -420,7 +403,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     } catch {}
 
     // Enviar respuesta
-    return res.json({ success: true, atoms, energy, efield, siteIndex, adsorbateIdx, normal0 });
+return res.json({ success: true, geometries, initialAtoms, atoms, energy, efield, siteIndex, adsorbateIdx, normal0 });
   } catch (err) {
     if (req.file?.path) {
       try {
