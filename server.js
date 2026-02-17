@@ -328,36 +328,16 @@ const atoms        = geometries.length ? geometries[geometries.length - 1] : [];
 
     const a0 = initialAtoms[siteIndex];
 
-// 1) Seleccionar carbonos vecinos LOCALES del átomo activo (siteIndex)
-//    OJO: "más cercanos" sin filtro puede agarrar carbonos de otra zona de la jaula.
+// 1) Seleccionar los 3 carbonos más cercanos al átomo activo (siteIndex)
 const candC = [];
-const dMax = 2.05; // Å: ventana segura para enlace B–C / N–C / C–C en jaula (ajústalo si tu tesis usa otro)
-
 for (let i = 0; i < firstAds; i++) {
   if (i === siteIndex) continue;
   const ai = initialAtoms[i];
   if (ai.el !== "C") continue;
-
   const d = Math.hypot(ai.x - a0.x, ai.y - a0.y, ai.z - a0.z);
-
-  // Solo vecinos locales (casi-enlace)
-  if (d <= dMax) candC.push({ i, d });
+  candC.push({ i, d });
 }
-
 candC.sort((u, v) => u.d - v.d);
-
-// Fallback: si por alguna razón no alcanzan 3 (raro), volvemos al método anterior
-if (candC.length < 3) {
-  candC.length = 0;
-  for (let i = 0; i < firstAds; i++) {
-    if (i === siteIndex) continue;
-    const ai = initialAtoms[i];
-    if (ai.el !== "C") continue;
-    const d = Math.hypot(ai.x - a0.x, ai.y - a0.y, ai.z - a0.z);
-    candC.push({ i, d });
-  }
-  candC.sort((u, v) => u.d - v.d);
-}
 
     if (candC.length >= 3) {
       const c1 = initialAtoms[candC[0].i];
